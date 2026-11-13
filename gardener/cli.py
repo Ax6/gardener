@@ -57,7 +57,10 @@ def cmd_run(args):
         "model": args.model, "effort": args.effort, "timeout": args.timeout,
         "others": [other(o) for o in args.other or []],
     }
-    work = os.path.abspath(args.work)
+    work = os.path.realpath(args.work)
+    # The reviewer is given these paths word for word, and may only run git in them.
+    args.repo = os.path.realpath(args.repo)
+    cfg["others"] = [(os.path.realpath(path), ref, note) for path, ref, note in cfg["others"]]
     os.makedirs(work, exist_ok=True)
     diff = sh("git", "-C", args.repo, "diff", f"{args.base}...{args.head}")
     stats = lines.collect(diff, args.repo, args.head)
