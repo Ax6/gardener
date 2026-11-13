@@ -1,0 +1,28 @@
+# Copy to .github/workflows/gardener.yml in the repository you want reviewed.
+name: Gardener
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: gardener-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write        # the chart images live on a branch of their own
+  pull-requests: write   # to post the review
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0               # the review needs the base commit as well as the head
+          persist-credentials: false   # the reviewer reads this checkout; leave no token in it
+      - uses: Ax6/gardener@main   # pin this to a commit once it works for you
+        with:
+          codex-access-token: ${{ secrets.CODEX_ACCESS_TOKEN }}

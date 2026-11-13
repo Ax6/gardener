@@ -1,0 +1,180 @@
+name: Gardener review
+description: Review a pull request for scope and weight, and post one chart with the findings.
+branding:
+  icon: scissors
+  color: green
+
+inputs:
+  agent:
+    description: "Which coding agent reviews: codex or claude."
+    default: codex
+  codex-access-token:
+    description: "For agent codex: a Codex access token from a ChatGPT workspace."
+    default: ""
+  openai-api-key:
+    description: "For agent codex: an OpenAI API key, billed per token."
+    default: ""
+  claude-code-oauth-token:
+    description: "For agent claude: a Claude Code token from `claude setup-token`, which runs on your Claude plan."
+    default: ""
+  anthropic-api-key:
+    description: "For agent claude: an Anthropic API key, billed per token."
+    default: ""
+  mode:
+    description: "report: post the review and pass. enforce: also fail the job when a step is above its limit."
+    default: report
+  model:
+    description: Model for the reviewer. Empty uses the reviewer's default.
+    default: ""
+  effort:
+    description: Reasoning effort for the reviewer.
+    default: high
+  others:
+    description: >
+      Repositories this code talks to, one per line, as OWNER/NAME@REF=a few words on what it is.
+      The reviewer reads them to see what the other side already does. Needs others-token.
+    default: ""
+  others-token:
+    description: A token that can read the repositories listed in others.
+    default: ""
+  scope-limits:
+    description: Scope marks in percent, as OK,ABOVE.
+    default: "20,30"
+  weight-limits:
+    description: Weight marks in percent, as OK,ABOVE.
+    default: "10,15"
+  min-lines:
+    description: Pull requests with fewer written lines than this are skipped.
+    default: "30"
+  github-token:
+    description: Token used to post the review and store the chart images.
+    default: ${{ github.token }}
+  codex-version:
+    description: "For agent codex: version of the Codex CLI to install."
+    default: latest
+  reviewer-command:
+    description: Replace the reviewer command. The task is appended as the last argument.
+    default: ""
+
+outputs:
+  scope:
+    description: Percent of lines beyond what the pull request needs.
+    value: ${{ steps.review.outputs.scope }}
+  weight:
+    description: Percent of added lines flagged. Empty when the weight step did not run.
+    value: ${{ steps.review.outputs.weight }}
+  above-the-limit:
+    description: "true when a step is above its limit."
+    value: ${{ steps.review.outputs.above }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install the reviewer
+      shell: bash
+      env:
+        AGENT: ${{ inputs.agent }}
+        CODEX_ACCESS_TOKEN: ${{ inputs.codex-access-token }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CODEX_VERSION: ${{ inputs.codex-version }}
+      run: |
+        if [ "$AGENT" = "claude" ]; then
+          npm install --global --silent @anthropic-ai/claude-code
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Give claude-code-oauth-token or anthropic-api-key." && exit 1
+          fi
+        else
+          npm install --global --silent "@openai/codex@$CODEX_VERSION"
+          if [ -n "$CODEX_ACCESS_TOKEN" ]; then
+            printenv CODEX_ACCESS_TOKEN | codex login --with-access-token
+          elif [ -n "$OPENAI_API_KEY" ]; then
+            printenv OPENAI_API_KEY | codex login --with-api-key
+          else
+            echo "::error::Give codex-access-token or openai-api-key." && exit 1
+          fi
+        fi
+
+    - name: Fetch the neighbouring repositories
+      if: inputs.others != ''
+      shell: bash
+      env:
+        OTHERS: ${{ inputs.others }}
+        OTHERS_TOKEN: ${{ inputs.others-token }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/gardener/others"
+        : > "$RUNNER_TEMP/gardener/others.txt"
+        while IFS= read -r line; do
+          [ -z "${line// }" ] && continue
+          spec="${line%%=*}"; note=""; [ "$line" != "$spec" ] && note="${line#*=}"
+          name="${spec%%@*}"; ref=""; [ "$spec" != "$name" ] && ref="${spec#*@}"
+          name="$(echo "$name" | xargs)"; ref="$(echo "$ref" | xargs)"
+          dir="$RUNNER_TEMP/gardener/others/${name//\//__}"
+          # A full bare copy of one branch: the reviewer has no network, so everything it reads must be here.
+          # The token is passed for this one command and is not written into the copy.
+          auth=()
+          [ -n "$OTHERS_TOKEN" ] && auth=(-c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$OTHERS_TOKEN" | base64 | tr -d '\n')")
+          git "${auth[@]}" clone --quiet --bare --depth 1 ${ref:+--branch "$ref"} "https://github.com/$name.git" "$dir"
+          echo "$dir@HEAD=$name: $note" >> "$RUNNER_TEMP/gardener/others.txt"
+        done <<< "$OTHERS"
+
+    - name: Review
+      id: review
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        AGENT: ${{ inputs.agent }}
+        PR: ${{ github.event.pull_request.number }}
+        BASE: ${{ github.event.pull_request.base.sha }}
+        HEAD: ${{ github.event.pull_request.head.sha }}
+        MODE: ${{ inputs.mode }}
+        MODEL: ${{ inputs.model }}
+        EFFORT: ${{ inputs.effort }}
+        SCOPE_LIMITS: ${{ inputs.scope-limits }}
+        WEIGHT_LIMITS: ${{ inputs.weight-limits }}
+        MIN_LINES: ${{ inputs.min-lines }}
+        REVIEWER: ${{ inputs.reviewer-command }}
+      run: |
+        work="$RUNNER_TEMP/gardener/work"
+        mkdir -p "$work"
+        gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title --jq .title > "$work/title.txt"
+        gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$work/body.md"
+        args=()
+        if [ -f "$RUNNER_TEMP/gardener/others.txt" ]; then
+          while IFS= read -r o; do args+=(--other "$o"); done < "$RUNNER_TEMP/gardener/others.txt"
+        fi
+        [ -n "$MODEL" ] && args+=(--model "$MODEL")
+        [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
+        [ -n "$REVIEWER" ] && args+=(--reviewer "$REVIEWER")
+        set +e
+        PYTHONPATH="$GITHUB_ACTION_PATH" python3 -m gardener run \
+          --repo "$GITHUB_WORKSPACE" --base "$BASE" --head "$HEAD" \
+          --title "$(cat "$work/title.txt")" --description "@$work/body.md" \
+          --pr "$PR" --github-repo "$GITHUB_REPOSITORY" --work "$work" --mode "$MODE" --agent "$AGENT" \
+          --scope-limits "$SCOPE_LIMITS" --weight-limits "$WEIGHT_LIMITS" --min-lines "$MIN_LINES" \
+          "${args[@]}" | tee "$work/result.txt"
+        code=${PIPESTATUS[0]}
+        set -e
+        { echo "### 🪴 Gardener review"; echo; cat "$work/result.txt"; } >> "$GITHUB_STEP_SUMMARY"
+        if [ -f "$work/outcome.json" ]; then
+          python3 - "$work/outcome.json" >> "$GITHUB_OUTPUT" <<'PY'
+        import json, sys
+        o = json.load(open(sys.argv[1]))
+        print(f"scope={o['scope']:.0f}")
+        print("weight=" + ("" if o["weight"] is None else f"{o['weight']:.0f}"))
+        print("above=" + str(o["above_the_limit"]).lower())
+        PY
+        fi
+        exit "$code"
+
+    - name: Keep the reviewer's notes
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: gardener-review
+        path: ${{ runner.temp }}/gardener/work
+        if-no-files-found: ignore
+        retention-days: 14
