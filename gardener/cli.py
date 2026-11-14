@@ -8,6 +8,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -31,6 +32,19 @@ def other(text):
 
 def sh(*cmd):
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+def look(args, work):
+    """What look.py needs to read other repositories and open pull requests, or None when it has no token."""
+    org = args.org or args.github_repo.partition("/")[0]
+    if not org:
+        origin = subprocess.run(["git", "-C", args.repo, "remote", "get-url", "origin"], capture_output=True, text=True).stdout
+        found = re.search(r"[:/]([^/:]+)/[^/]+?(?:\.git)?\s*$", origin)
+        org = found.group(1) if found else ""
+    if not (org and os.environ.get("GARDENER_READ_TOKEN")):
+        return None
+    head = sh("git", "-C", args.repo, "rev-parse", args.head).strip()
+    return {"GARDENER_ORG": org, "GARDENER_LOOK_DIR": os.path.join(work, "look"), "GARDENER_HEAD_SHA": head}
 
 
 def near(share, marks, margin):
@@ -62,15 +76,16 @@ def cmd_run(args):
     args.repo = os.path.realpath(args.repo)
     cfg["others"] = [(os.path.realpath(path), ref, note) for path, ref, note in cfg["others"]]
     os.makedirs(work, exist_ok=True)
+    cfg["look"] = look(args, work)
     diff = sh("git", "-C", args.repo, "diff", f"{args.base}...{args.head}")
-    stats = lines.collect(diff, args.repo, args.head)
+    stats = lines.collect(diff, args.repo, args.head, args.only or (), args.skip or ())
     lines.write(stats, work)
     with open(os.path.join(work, "pr.diff"), "w", encoding="utf-8") as fh:
         fh.write(diff)
     with open(os.path.join(work, "desc.md"), "w", encoding="utf-8") as fh:
         fh.write(f"# {args.title}\n\n{args.description_text()}\n")
 
-    written = sum(f["code"] + f["doc"] + f["prose"] for f in stats["files"] if f["bucket"] not in ("generated", "config"))
+    written = sum(f["code"] + f["doc"] + f["prose"] for f in stats["files"] if f["bucket"] not in lines.UNCOUNTED)
     if written < args.min_lines:
         print(f"skipped: {written} written lines, under the floor of {args.min_lines}")
         return 0
@@ -92,7 +107,8 @@ def cmd_run(args):
     for theme in ("light", "dark"):
         with open(os.path.join(work, f"card-{theme}.svg"), "w", encoding="utf-8") as fh:
             fh.write(card.render(sm, wm, theme, cfg["scope_limits"], cfg["weight_limits"]))
-    print(f'scope {sm["share"]:.0f}% ({card.OUTCOME[s_state][1]})' + (f', weight {wm["share"]:.0f}% ({card.OUTCOME[w_state][1]})' if wm else ", weight not run"))
+    print(f'scope {sm["share"]:.0f}% ({card.OUTCOME[s_state][1]})' + (f', weight {wm["share"]:.0f}% ({card.OUTCOME[w_state][1]})' if wm else ", weight not run")
+          + (f', {sm["skipped"]} lines not counted' if sm["skipped"] else ""))
     if args.pr:
         print(github.publish(args.github_repo, args.pr, args.head, sm, wm, stats, diff, cfg, args.note, args.dry_run))
     above = "fail" in (s_state, w_state)
@@ -147,6 +163,12 @@ def main(argv=None):
     r.add_argument("--description", default="", help="pull request description, or @FILE to read it from a file")
     r.add_argument("--other", action="append", metavar="PATH[@REF][=NOTE]",
                    help="checkout of a service this code talks to, the ref to read and a few words on what it is; repeatable")
+    r.add_argument("--skip", action="append", metavar="PATTERN",
+                   help="paths that are not part of the running application and are left out of both scores, "
+                        "for example lab/ or *.ipynb; repeatable")
+    r.add_argument("--only", action="append", metavar="PATTERN", help="when given, only these paths are counted; repeatable")
+    r.add_argument("--org", help="organisation whose other repositories and open pull requests the reviewer may read, "
+                   "with the read-only token in GARDENER_READ_TOKEN (default: the owner of the repository under review)")
     r.add_argument("--work", default=".gardener", help="directory for inputs, reviewer output and charts")
     r.add_argument("--pr", type=int, help="pull request number; without it nothing is posted")
     r.add_argument("--github-repo", default=os.environ.get("GITHUB_REPOSITORY", ""), help="OWNER/NAME")

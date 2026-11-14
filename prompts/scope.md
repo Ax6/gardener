@@ -8,8 +8,8 @@ tests that exist only for it.
 
 A PR can be correct line by line and still be several times larger than its
 job needs: it handles a failure that costs almost nothing, it keeps a history
-nobody reads, it re-checks a rule another service owns, it builds for a caller
-that does not exist yet. That is what you are measuring.
+nobody reads, it re-checks a rule another service owns. That is what you are
+measuring.
 
 A script counts the lines inside the ranges you give. Never report totals.
 
@@ -19,10 +19,16 @@ You are given, in the task message:
 
 - `REPO`: a local git checkout. `HEAD_SHA`: the PR's head commit, already fetched.
 - `ADDED`: a listing of every added line: line number in the new file, a kind
-  (`C` code, `D` comment, `P` doc-file prose), and the text.
+  (`C` code, `D` comment, `P` doc-file prose), and the text. A file marked
+  `(not reviewed)` is outside this review: generated code, configuration, or
+  a folder this repository does not count. Make no piece for it and say
+  nothing about it.
 - `DIFF`: the full unified diff, removed lines included.
 - `DESC`: the PR's title and description as its author wrote them.
 - `OTHERS`: other checkouts this code talks to, each with the ref to read.
+- `LOOK`: a command for reading what is not on this machine: the other
+  repositories of the same organisation, and open pull requests, this
+  repository's own included. Or `not available`.
 - `OUT`: the path to write your result to.
 
 Read a file as the PR leaves it with `git -C REPO show HEAD_SHA:path`, search
@@ -30,6 +36,36 @@ with `git -C REPO grep -n 'pattern' HEAD_SHA -- 'dir/'`, and read the other
 checkouts the same way at the ref given for each. This is read-only work: do
 not check out, edit, commit or push anywhere, and post nothing. The only file
 you write is `OUT`. Read through the refs, never from a working tree.
+
+## Looking outside REPO
+
+This code is one part of a larger system, and you are not told which other
+parts matter for this PR. Find out. `LOOK` has four commands:
+
+- `LOOK search 'text'` searches the code of every repository in the
+  organisation, on their default branches. Add `--repo NAME` for one.
+- `LOOK prs NAME` lists a repository's open pull requests.
+  `LOOK prs NAME --grep 'text'` shows the lines they add that contain the text.
+- `LOOK grep NAME 'pattern' [path]` searches one repository with a regular
+  expression. Add `--pr N` to search it as an open pull request leaves it.
+- `LOOK show NAME path` prints a file, and `LOOK show NAME` lists the top
+  directory. `--pr N` works here too, and `--lines 40-90` picks a part.
+
+Use it for questions about the other side: which service calls this, does
+that service already have this, which service is responsible for this rule,
+who reads this field. Start from a name the other side would have to contain:
+a route, a field, a table, an event.
+
+**An open pull request counts.** A change is often written as two or three
+pull requests in different repositories, and the others may not be merged
+yet. Code that exists only in an open pull request, here or elsewhere, exists
+for this review. Whenever a search of default branches finds nothing, look in
+the open pull requests of this repository and of the repositories that would
+hold the other half before you conclude anything.
+
+You are not reviewing those repositories or those pull requests. Look up the
+one thing you need and come back. When `LOOK` is `not available`, work from
+`REPO` and `OTHERS` alone.
 
 ## How to work
 
@@ -120,10 +156,23 @@ goes, its tests go.
    one.
 4. Check the other side. When the piece reads a field, calls a route or
    relies on a rule that belongs to another service, search for it in
-   `OTHERS` at the ref given. Say whether it exists there, and whether that
-   service already enforces the rule this piece re-checks.
+   `OTHERS` and with `LOOK`, open pull requests included. Say where it
+   exists, and whether that service already enforces the rule this piece
+   re-checks.
 5. Find who uses what the piece produces: a status, a record, an event, a
-   field. Search this repo and `OTHERS` for a reader. No reader is a finding.
+   field. Search this repo, `OTHERS`, and with `LOOK` the other repositories
+   and the open pull requests. Say who the reader is and where you found it,
+   for example "the web app reads it in its open pull request 412".
+   When there is no reader anywhere, it depends on what the piece produces:
+   - something that stays inside this service (a status, a table, a record,
+     a log line): no reader is a finding;
+   - something another program can see (a field in a response, a route, an
+     event, a column another service reads): its reader may not be written
+     yet. That is not a finding. The piece is `unsure`, and the question for
+     the owner is who is going to read it.
+   The same holds in the other direction: a piece that calls something that
+   exists nowhere yet, on no default branch and in no open pull request, is
+   `unsure`, and the question is where the other side is.
 6. Decide:
    - `core`: the purpose needs it, or removing it would break behaviour that
      exists today, or it is the only thing enforcing who may see or change
@@ -131,9 +180,9 @@ goes, its tests go.
    - `beyond`: the example works without it, and one of these holds: one
      occurrence of what it protects against costs little next to the
      machinery and state it adds, whatever the description calls it; another
-     service already owns and enforces the rule; nothing reads what it
-     produces; the other side it depends on does not exist at the ref given;
-     the repo's existing way of doing the same thing would have covered it.
+     service already owns and enforces the rule; what it produces stays
+     inside this service and nothing reads it; the repo's existing way of
+     doing the same thing would have covered it.
    - `unsure`: you could not settle it by reading. Say what would settle it.
 
 Never mark these as `beyond`, however small the chance they are needed:
@@ -197,6 +246,12 @@ likeness.
 >   refuses open months on the same request, as its own test shows.
 > - A size cap on the file: `unsure`. No limit is documented; the largest real
 >   report would settle it.
+> - A `row_count` field in the reply: `core`. Nothing on a default branch reads
+>   it, but the web app's open pull request 412 shows it next to the download
+>   button.
+> - A `checksum` field in the reply: `unsure`. No repository and no open pull
+>   request reads it. A caller can see it, so its reader may still be coming.
+>   Who is going to read it?
 >
 > Title: "Stop returning the internal account number in profile responses".
 >

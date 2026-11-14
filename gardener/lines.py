@@ -13,14 +13,17 @@ import os
 import re
 import subprocess
 import tokenize
+from fnmatch import fnmatchcase
 
-BUCKETS = ["production", "tests", "generated", "docs", "config"]
+BUCKETS = ["production", "tests", "generated", "docs", "config", "skipped"]
+UNCOUNTED = ("generated", "config", "skipped")  # named to the reviewer, never listed, never in a score
 LABEL = {
     "production": "Production",
     "tests": "Tests",
     "generated": "Generated",
     "docs": "Doc files",
     "config": "Config and CI",
+    "skipped": "Not counted here",
 }
 
 GENERATED_PATH = re.compile(
@@ -41,6 +44,13 @@ SLASH_LANGS = (
     ".rs", ".swift", ".scala", ".dart", ".proto", ".php",
 )
 HASH_LANGS = (".yml", ".yaml", ".toml", ".sh", ".cfg", ".ini", ".env", ".example", ".rb", ".ex", ".exs")
+
+
+def counted(path, only=(), skip=()):
+    """The repository's own two lists. A pattern ending in / is a folder, and * matches anything, slashes too.
+    `skip` always wins. When `only` is given, nothing outside it counts."""
+    hit = lambda patterns: any(fnmatchcase(path, p + "*" if p.endswith("/") else p) for p in patterns)
+    return not hit(skip) and (not only or hit(only))
 
 
 def bucket_of(path, content):
@@ -164,12 +174,12 @@ def read_at(repo, sha, path):
         return None
 
 
-def collect(diff_text, repo=None, head=None):
+def collect(diff_text, repo=None, head=None, only=(), skip=()):
     """Sort every added line. Returns {"files": [{path, bucket, added, removed, code, doc, blank, prose, lines}]}."""
     out = []
     for f in parse_diff(diff_text):
         content = None if f["deleted"] else read_at(repo, head, f["path"])
-        bucket = bucket_of(f["path"], content)
+        bucket = bucket_of(f["path"], content) if counted(f["path"], only, skip) else "skipped"
         docs = doc_lines(f["path"], content)
         lines = []
         for no, text in f["added"]:
@@ -181,13 +191,13 @@ def collect(diff_text, repo=None, head=None):
 
 
 def listing(stats):
-    """The numbered listing the reviewer reads. Generated and config files are named, not listed."""
+    """The numbered listing the reviewer reads. Files that are not counted are named, not listed."""
     out = ["# Every line this PR adds. Columns: line number in the new file, kind (C code, D comment or docstring, P prose in a doc file), text."]
     for f in stats["files"]:
         if not f["added"]:
             continue
         out.append(f"\n=== {f['path']}  [{f['bucket']}]  +{f['added']} -{f['removed']}")
-        if f["bucket"] in ("generated", "config"):
+        if f["bucket"] in UNCOUNTED:
             out.append("(not reviewed: lines not listed)")
             continue
         for no, kind, text in f["lines"]:

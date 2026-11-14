@@ -15,8 +15,11 @@ import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
+from .lines import UNCOUNTED
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROMPTS = os.path.join(os.path.dirname(HERE), "prompts")
+LOOK = os.path.join(HERE, "look.py")  # the reviewer's way to read other repositories and open pull requests
 CODEX = "codex exec --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules -s workspace-write"
 # Claude gets a short list of tools: read anything, run read-only git in the checkouts it was
 # given plus a few read-only commands, and write only inside the work directory. No web, no
@@ -52,11 +55,13 @@ def command(cfg, work, task, checkouts):
         allowed = ["Read", "Grep", "Glob", f"Edit(/{os.path.realpath(work)}/**)"]
         allowed += [f"Bash(git -C {d} {sub} *)" for d in dirs for sub in CLAUDE_GIT]
         allowed += [f"Bash({c} *)" for c in CLAUDE_SHELL]
+        allowed += [f"Bash(python3 {LOOK} *)"] if cfg.get("look") else []
         cmd = shlex.split(CLAUDE) + ["--add-dir", *dirs, "--allowedTools", *allowed]
         cmd += ["--model", cfg["model"]] if cfg.get("model") else []
         cmd += ["--effort", cfg["effort"]] if cfg.get("effort") else []
         return cmd, task  # the lists above are open-ended, so the task goes in on stdin
     cmd = shlex.split(CODEX) + ["-C", work]
+    cmd += ["-c", "sandbox_workspace_write.network_access=true"] if cfg.get("look") else []  # look.py talks to GitHub
     cmd += ["-m", cfg["model"]] if cfg.get("model") else []
     cmd += ["-c", f'model_reasoning_effort="{cfg["effort"]}"'] if cfg.get("effort") else []
     return cmd + [task], None
@@ -67,8 +72,11 @@ def run(task, work, out, cfg, checkouts):
     path = os.path.join(work, out)
     if os.path.exists(path):
         os.remove(path)
-    # The reviewer reads text written by the PR's author. It gets no GitHub credentials.
-    env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")}
+    # The reviewer reads text written by the PR's author. It gets no GitHub credentials that can
+    # write. The one it may get is the read-only token look.py uses, and only when look is on.
+    env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GARDENER_READ_TOKEN")}
+    if cfg.get("look"):
+        env.update(cfg["look"], GARDENER_READ_TOKEN=os.environ["GARDENER_READ_TOKEN"])
     argv, stdin = command(cfg, work, task, checkouts)
     try:
         r = subprocess.run(argv, cwd=work, capture_output=True, text=True, env=env, input=stdin or "",
@@ -93,6 +101,7 @@ def _checkouts(repo, cfg):
 def scope(repo, head, work, cfg, tag=""):
     others = "".join(f"  - {p} at `{ref}`" + (f": {note}" if note else "") + "\n" for p, ref, note in cfg.get("others", []))
     extra = f"- DESC = {work}/desc.md\n" + (f"- OTHERS =\n{others}" if others else "- OTHERS = none\n")
+    extra += f"- LOOK = python3 {LOOK}\n" if cfg.get("look") else "- LOOK = not available\n"
     task = TASK.format(prompt=os.path.join(PROMPTS, "scope.md"), lane="", them="it", repo=repo, head=head, work=work,
                        extra=extra, out=f"scope{tag}.json")
     return run(task, work, f"scope{tag}.json", cfg, _checkouts(repo, cfg))
@@ -104,7 +113,7 @@ def weight(repo, head, work, stats, cfg):
     has = {
         "code": any(f["bucket"] == "production" and f["code"] for f in stats["files"]),
         "tests": any(f["bucket"] == "tests" and f["added"] for f in stats["files"]),
-        "comments": any(f["doc"] or f["prose"] for f in stats["files"] if f["bucket"] not in ("generated", "config")),
+        "comments": any(f["doc"] or f["prose"] for f in stats["files"] if f["bucket"] not in UNCOUNTED),
     }
 
     def lane(name, extra=""):

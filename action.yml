@@ -29,6 +29,13 @@ inputs:
   effort:
     description: Reasoning effort for the reviewer.
     default: high
+  read-token:
+    description: >
+      A read-only token for the organisation's repositories (contents and pull requests: read).
+      With it the reviewer looks up what it needs by itself: who calls a route, whether another
+      service already has a rule, and whether an open pull request holds the other half of a change.
+      Give it no write access: the reviewer can see it.
+    default: ""
   others:
     description: >
       Repositories this code talks to, one per line, as OWNER/NAME@REF=a few words on what it is.
@@ -46,6 +53,14 @@ inputs:
   min-lines:
     description: Pull requests with fewer written lines than this are skipped.
     default: "30"
+  skip-paths:
+    description: >
+      Paths that are not part of the running application, one per line: experiments, notebooks, one-off scripts.
+      They are left out of both scores. A pattern ending in / is a folder, and * matches anything.
+    default: ""
+  only-paths:
+    description: When given, only these paths are counted, one per line. skip-paths still wins.
+    default: ""
   github-token:
     description: Token used to post the review and store the chart images.
     default: ${{ github.token }}
@@ -124,6 +139,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
+        GARDENER_READ_TOKEN: ${{ inputs.read-token }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         AGENT: ${{ inputs.agent }}
@@ -136,6 +152,8 @@ runs:
         SCOPE_LIMITS: ${{ inputs.scope-limits }}
         WEIGHT_LIMITS: ${{ inputs.weight-limits }}
         MIN_LINES: ${{ inputs.min-lines }}
+        SKIP_PATHS: ${{ inputs.skip-paths }}
+        ONLY_PATHS: ${{ inputs.only-paths }}
         REVIEWER: ${{ inputs.reviewer-command }}
       run: |
         work="$RUNNER_TEMP/gardener/work"
@@ -146,6 +164,8 @@ runs:
         if [ -f "$RUNNER_TEMP/gardener/others.txt" ]; then
           while IFS= read -r o; do args+=(--other "$o"); done < "$RUNNER_TEMP/gardener/others.txt"
         fi
+        while IFS= read -r p; do [ -n "${p// }" ] && args+=(--skip "$(echo "$p" | xargs)"); done <<< "$SKIP_PATHS"
+        while IFS= read -r p; do [ -n "${p// }" ] && args+=(--only "$(echo "$p" | xargs)"); done <<< "$ONLY_PATHS"
         [ -n "$MODEL" ] && args+=(--model "$MODEL")
         [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
         [ -n "$REVIEWER" ] && args+=(--reviewer "$REVIEWER")

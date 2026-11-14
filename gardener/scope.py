@@ -82,4 +82,5 @@ def model(stats, review):
         "over": sorted((r for r in rows if r["has"] > r["needs"] or r["role"] == "unsure"),
                        key=lambda r: -(r["has"] - r["needs"])),
         "unplaced": len(lines) - len(taken),
+        "skipped": sum(f["added"] for f in stats["files"] if f["bucket"] == "skipped"),
     }

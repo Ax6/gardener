@@ -112,6 +112,7 @@ jobs:
 |---|---|---|
 | `agent` | `codex` | Which coding agent reviews: `codex` or `claude`. |
 | `mode` | `report` | `report` posts the review and passes. `enforce` also fails the job when a level is above its limit. |
+| `read-token` | | A read-only token for your organisation's repos (contents and pull requests). With it the reviewer goes and looks things up by itself: who calls this route, does the other service already check this, is the other half of the change sitting in an open PR. |
 | `others` | | Repositories this code talks to, one per line: `OWNER/NAME@REF=a few words on what it is`. The reviewer reads them to see what the other side already does. |
 | `others-token` | | A token that can read the repositories in `others`. |
 | `model` | the reviewer's default | Model for the reviewer. |
@@ -119,6 +120,8 @@ jobs:
 | `scope-limits` | `20,30` | The two Scope marks, in percent. |
 | `weight-limits` | `10,15` | The two Weight marks, in percent. |
 | `min-lines` | `30` | Smaller pull requests are skipped. |
+| `skip-paths` | | Paths that aren't part of the running application, one per line: `lab/`, `notebooks/`, `*.ipynb`. They're left out of both scores, and the review says how many lines that was. |
+| `only-paths` | | The other way round: when set, only these paths are counted. `skip-paths` still wins. |
 | `reviewer-command` | `codex exec …` | Use another agent. It gets the task as its last argument and must write the file the task names. |
 
 The action sets three outputs: `scope`, `weight` and `above-the-limit`.
@@ -146,6 +149,7 @@ weight = lines flagged ÷ lines added                           code, comments, 
 <br>
 
 - Generated files, config and blank lines are never counted.
+- Experiments are yours to keep messy. Put the folders in `skip-paths` and they're left out. The test for what belongs there: if you deleted the folder tomorrow, would anything that runs break?
 - Tests count with the piece they belong to: cut the piece and its tests go too, keep it and they all stay. Whether a piece you keep has too many tests is Level 2's call.
 - Doc files are left out of Scope. Weight looks at them.
 - A piece the reviewer couldn't settle counts as needed and shows up as a question.
@@ -161,6 +165,7 @@ The prompts are in [`prompts/`](prompts) and they're pretty much the whole produ
 - "Durable", "guaranteed", "hardened" and friends never count as what the PR is for. Those words are how a title asks for extra machinery, and the machinery has to earn its place: what does one failure cost, compared to the lines it adds?
 - Some stuff is never bloat: the thing the PR is for and the test that shows it, the only check on input from outside, the only check on who can see or change data, error handling that stops stored data getting lost, and changes the PR forces in other places.
 - It has to go and look before it rules. It can't call a line a duplicate until it has found the code being duplicated, and it writes down what it searched for.
+- An open PR counts as existing. Half of a change often lives in another repo's PR that isn't merged yet, so with a `read-token` the reviewer checks open PRs before it says "nobody uses this". And when a field in a response has no reader anywhere, that's a question for you ("who is going to read this?") and not a cut.
 - Simple words only.
 
 ## Run it on your laptop
@@ -188,7 +193,7 @@ python3 examples/demo.py             # redraw the example charts
 - Different models are differently strict. Same PR, same prompt: one model called about 50% of it extra, another about 85%. Both said "way over", but the marks only mean something for the model you set them with, so pick one reviewer and stick to it.
 - The Weight marks are a first guess. The Scope marks were picked after looking at where real PRs landed, and Weight hasn't had that yet.
 - It's slow. Reading the code around every piece takes minutes.
-- It trusts your team. The reviewer reads whatever the PR author wrote, and it runs signed in to the model on your runner. It gets no GitHub token and its sandbox has no network, but still, use it on PRs from your own people. Fork PRs get no secrets from GitHub, so they don't get reviewed.
+- It trusts your team. The reviewer reads whatever the PR author wrote, and it runs signed in to the model on your runner. It never gets a token that can write, and the only one it can see at all is the `read-token`, if you set one (so keep that one read-only). Still, use it on PRs from your own people. Fork PRs get no secrets from GitHub, so they don't get reviewed.
 - The GitHub Action wrapper is the newest part and the least tried. The review itself has run on plenty of real PRs from the command line.
 
 ## Licence

@@ -70,6 +70,8 @@ def body(sm, wm, repo, head, light, dark, cfg, note="", start=None):
         out += [f"_{note}_", ""]
     out += ["<picture>", f'  <source media="(prefers-color-scheme: dark)" srcset="{dark}">', f'  <img alt="{alt}" src="{light}" width="800">', "</picture>", ""]
     out += [f'**Purpose.** {sm["purpose"]}', ""]
+    if sm.get("skipped"):
+        out += [f'_{sm["skipped"]} added lines are in paths this repository does not count (experiments and the like). They are left out of both scores._', ""]
 
     if sm["over"]:
         def where(r):

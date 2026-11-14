@@ -6,7 +6,7 @@ only lines the PR added, of the kind the category applies to, are counted,
 and a line is counted once however many findings cover it.
 """
 
-from .lines import totals
+from .lines import UNCOUNTED, totals
 
 # category -> (family, label). The family decides which added lines a finding may count.
 CATEGORIES = {
@@ -31,7 +31,7 @@ def apply_findings(stats, findings):
     kept, dropped = [], []
     for fd in findings:
         cat, f = fd.get("category"), by_path.get(fd.get("file"))
-        if cat not in CATEGORIES or f is None or f["bucket"] in ("generated", "config"):
+        if cat not in CATEGORIES or f is None or f["bucket"] in UNCOUNTED:
             dropped.append(fd)
             continue
         family = CATEGORIES[cat][0]
