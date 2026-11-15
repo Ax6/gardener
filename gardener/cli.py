@@ -13,7 +13,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from . import card, github, lines, reviewer, scope, weight
+from . import account, card, github, lines, reviewer, scope, weight
 
 
 def limits(text):
@@ -47,6 +47,12 @@ def look(args, work):
     return {"GARDENER_ORG": org, "GARDENER_LOOK_DIR": os.path.join(work, "look"), "GARDENER_HEAD_SHA": head}
 
 
+def diff_of(repo, base, head, spacing=False):
+    """The pull request's diff. Without `spacing`, a line that only changed its spacing (a formatter
+    re-aligning a struct, a block indented one level deeper) is not a change: nobody wrote it."""
+    return sh("git", "-C", repo, "diff", *([] if spacing else ["-w"]), f"{base}...{head}")
+
+
 def near(share, marks, margin):
     return any(abs(share - m) <= margin for m in marks)
 
@@ -68,7 +74,7 @@ def review_scope(args, cfg, stats, work):
 def cmd_run(args):
     cfg = {
         "scope_limits": args.scope_limits, "weight_limits": args.weight_limits, "command": args.reviewer, "agent": args.agent,
-        "model": args.model, "effort": args.effort, "timeout": args.timeout,
+        "model": args.model, "effort": args.effort, "timeout": args.timeout, "fit": args.fit,
         "others": [other(o) for o in args.other or []],
     }
     work = os.path.realpath(args.work)
@@ -77,7 +83,7 @@ def cmd_run(args):
     cfg["others"] = [(os.path.realpath(path), ref, note) for path, ref, note in cfg["others"]]
     os.makedirs(work, exist_ok=True)
     cfg["look"] = look(args, work)
-    diff = sh("git", "-C", args.repo, "diff", f"{args.base}...{args.head}")
+    diff = diff_of(args.repo, args.base, args.head)
     stats = lines.collect(diff, args.repo, args.head, args.only or (), args.skip or ())
     lines.write(stats, work)
     with open(os.path.join(work, "pr.diff"), "w", encoding="utf-8") as fh:
@@ -90,7 +96,21 @@ def cmd_run(args):
         print(f"skipped: {written} written lines, under the floor of {args.min_lines}")
         return 0
 
+    if args.account_only:
+        result = reviewer.account(args.repo, args.head, work, cfg)
+        if result is None:
+            print("the reviewer produced no account result")
+            return 0
+        am = account.model(stats, result)
+        print(f'account: {am["share"]:.0f}% of {am["total"]} lines stand on decisions the author has not accounted for')
+        for state in account.STATES:
+            print(f'  {state:14} {am["count"][state]:2} decisions, {am["by"][state]:4} lines')
+        return 0
+
+    alone = ThreadPoolExecutor(max_workers=1).submit(reviewer.fit, args.repo, args.head, work, cfg) if args.fit == "alone" else None
     sm = review_scope(args, cfg, stats, work)
+    if alone:
+        alone.result()
     if sm is None:
         print("the reviewer produced no scope result; nothing posted")
         return 0 if args.mode == "report" else 2
@@ -110,7 +130,9 @@ def cmd_run(args):
     print(f'scope {sm["share"]:.0f}% ({card.OUTCOME[s_state][1]})' + (f', weight {wm["share"]:.0f}% ({card.OUTCOME[w_state][1]})' if wm else ", weight not run")
           + (f', {sm["skipped"]} lines not counted' if sm["skipped"] else ""))
     if args.pr:
-        print(github.publish(args.github_repo, args.pr, args.head, sm, wm, stats, diff, cfg, args.note, args.dry_run))
+        # Comments are placed against the diff GitHub shows, which has the spacing changes in it.
+        posted = diff_of(args.repo, args.base, args.head, spacing=True)
+        print(github.publish(args.github_repo, args.pr, args.head, sm, wm, stats, posted, cfg, args.note, args.dry_run))
     above = "fail" in (s_state, w_state)
     with open(os.path.join(work, "outcome.json"), "w", encoding="utf-8") as fh:
         json.dump({"scope": sm["share"], "scope_outcome": s_state, "weight": wm["share"] if wm else None,
@@ -167,6 +189,11 @@ def main(argv=None):
                    help="paths that are not part of the running application and are left out of both scores, "
                         "for example lab/ or *.ipynb; repeatable")
     r.add_argument("--only", action="append", metavar="PATTERN", help="when given, only these paths are counted; repeatable")
+    r.add_argument("--account-only", action="store_true",
+                   help="experimental: only list the PR's decisions and whether the author accounted for each (account.json)")
+    r.add_argument("--fit", choices=("off", "with-scope", "alone"), default="off",
+                   help="experimental: also ask whether the PR builds on what is already there. with-scope: the scope "
+                        "reviewer answers it too (fit.json). alone: a second reviewer does only that (fit-alone.json). Not posted.")
     r.add_argument("--org", help="organisation whose other repositories and open pull requests the reviewer may read, "
                    "with the read-only token in GARDENER_READ_TOKEN (default: the owner of the repository under review)")
     r.add_argument("--work", default=".gardener", help="directory for inputs, reviewer output and charts")

@@ -132,7 +132,10 @@ test is needed or how many tests a piece should have; another review does
 that, test by test. Here a test only follows its piece: where the piece
 goes, its tests go.
 
-**Step 4: one piece at a time.** For each piece:
+**Step 4: one piece at a time.** When one piece exists only because of
+another, judge the lower one first and judge the upper one as if the lower
+one stays: doubt about a piece belongs to that piece, not to what is built
+on it. For each piece:
 
 1. Delete it in your head. Does your example from step 1 still come out the
    way the purpose says? If it does not, the piece is `core`. Go to the next

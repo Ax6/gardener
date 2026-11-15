@@ -40,7 +40,7 @@ Inputs for this run:
 - DIFF = {work}/pr.diff
 {extra}- OUT = {work}/{out}
 
-Read-only: do not check out, edit, commit or push anything in any checkout, and post nothing anywhere. The only file you write is OUT. Outside the checkouts named above, read only the files named in this message.
+Read-only: do not check out, edit, commit or push anything in any checkout, and post nothing anywhere. The only files you write are OUT and, when it is given, FIT_OUT. Outside the checkouts named above, read only the files named in this message.
 
 If you cannot read REPO through git at all, do not write OUT. Reply with the exact error instead.
 """
@@ -98,11 +98,34 @@ def _checkouts(repo, cfg):
     return [repo] + [path for path, _, _ in cfg.get("others", [])]
 
 
+def _look_line(cfg):
+    return f"- LOOK = python3 {LOOK}\n" if cfg.get("look") else "- LOOK = not available\n"
+
+
+def account(repo, head, work, cfg):
+    """Experimental: the decisions in the PR and whether the author accounted for each."""
+    extra = f"- DESC = {work}/desc.md\n" + _look_line(cfg)
+    task = TASK.format(prompt=os.path.join(PROMPTS, "account.md"), lane="", them="it", repo=repo, head=head, work=work,
+                       extra=extra, out="account.json")
+    return run(task, work, "account.json", cfg, _checkouts(repo, cfg))
+
+
+def fit(repo, head, work, cfg):
+    """The questions about building on what is there, asked by a reviewer that does nothing else."""
+    extra = f"- DESC = {work}/desc.md\n" + _look_line(cfg) + f"- FIT_OUT = {work}/fit-alone.json\n"
+    task = TASK.format(prompt=os.path.join(PROMPTS, "fit.md"), lane="", them="it", repo=repo, head=head, work=work,
+                       extra=extra, out="fit-alone.json")
+    return run(task, work, "fit-alone.json", cfg, _checkouts(repo, cfg))
+
+
 def scope(repo, head, work, cfg, tag=""):
     others = "".join(f"  - {p} at `{ref}`" + (f": {note}" if note else "") + "\n" for p, ref, note in cfg.get("others", []))
     extra = f"- DESC = {work}/desc.md\n" + (f"- OTHERS =\n{others}" if others else "- OTHERS = none\n")
-    extra += f"- LOOK = python3 {LOOK}\n" if cfg.get("look") else "- LOOK = not available\n"
-    task = TASK.format(prompt=os.path.join(PROMPTS, "scope.md"), lane="", them="it", repo=repo, head=head, work=work,
+    extra += _look_line(cfg)
+    lane = ""
+    if cfg.get("fit") == "with-scope":  # the same reviewer answers both, scope first
+        lane, extra = f", then {os.path.join(PROMPTS, 'fit.md')},", extra + f"- FIT_OUT = {work}/fit{tag}.json\n"
+    task = TASK.format(prompt=os.path.join(PROMPTS, "scope.md"), lane=lane, them="them" if lane else "it", repo=repo, head=head, work=work,
                        extra=extra, out=f"scope{tag}.json")
     return run(task, work, f"scope{tag}.json", cfg, _checkouts(repo, cfg))
 

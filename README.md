@@ -148,7 +148,7 @@ weight = lines flagged ÷ lines added                           code, comments, 
 
 <br>
 
-- Generated files, config and blank lines are never counted.
+- Generated files, config and blank lines are never counted. Neither is a line that only changed its spacing, like the struct your formatter re-aligned.
 - Experiments are yours to keep messy. Put the folders in `skip-paths` and they're left out. The test for what belongs there: if you deleted the folder tomorrow, would anything that runs break?
 - Tests count with the piece they belong to: cut the piece and its tests go too, keep it and they all stay. Whether a piece you keep has too many tests is Level 2's call.
 - Doc files are left out of Scope. Weight looks at them.
