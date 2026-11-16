@@ -121,7 +121,7 @@ def fit(repo, head, work, cfg):
 def scope(repo, head, work, cfg, tag=""):
     others = "".join(f"  - {p} at `{ref}`" + (f": {note}" if note else "") + "\n" for p, ref, note in cfg.get("others", []))
     extra = f"- DESC = {work}/desc.md\n" + (f"- OTHERS =\n{others}" if others else "- OTHERS = none\n")
-    extra += _look_line(cfg)
+    extra += _look_line(cfg) + (f"- STACK = {cfg['stack']}\n" if cfg.get("stack") else "- STACK = none\n")
     lane = ""
     if cfg.get("fit") == "with-scope":  # the same reviewer answers both, scope first
         lane, extra = f", then {os.path.join(PROMPTS, 'fit.md')},", extra + f"- FIT_OUT = {work}/fit{tag}.json\n"

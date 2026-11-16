@@ -7,7 +7,8 @@ and gave a reason that holds against what can be read.
 You are not judging whether a decision is right. A decision the author made
 on purpose and explained is fine here, whatever you think of it. What this
 review looks for is the decision nobody explained, and the explanation that
-falls apart when someone looks.
+falls apart when someone looks. It also looks for the explanation that is
+true and rests on something that is not settled yet.
 
 A script counts the lines inside the ranges you give. Never report totals.
 
@@ -76,7 +77,18 @@ decision. When two decisions share a line, give it to the more specific one.
 ## Pass 2: what the author says
 
 Now read `DESC`, and the comments in the added code (the `D` lines of
-`ADDED`). For each decision, find where the author talks about it.
+`ADDED`).
+
+First write `purpose`: one sentence, in your own words, on what the pull
+request is for. Take it from the title and the opening of `DESC`. Then find
+the decisions that are the purpose itself: the thing the pull request exists
+to deliver. Give them the state `purpose` and stop there for them. They need
+no reason and get no question. Be strict about this. The purpose is one
+thing, sometimes two. The way the author chose to deliver it is not the
+purpose: "members can read their company's reports" is a purpose, and the
+cache, the new table and the second client that make it work are decisions.
+
+For each other decision, find where the author talks about it.
 
 - Quote the author's words in `says`, shortened if long, and write where
   they are in `where`: `description`, or `path:line` for a comment.
@@ -113,18 +125,48 @@ A reason always points at something. Find what it points at, write it in
 
 Then set the state:
 
-- `holds`: what the reason points at exists, in a state that supports the
-  reason, and says or does what the author says.
+- `holds`: what the reason points at exists, and says or does what the
+  author says. How settled it is does not change this state. That is a
+  separate fact, written in `standing`.
 - `does_not_hold`: it is missing, or it is not what the author says it is,
   or it does not say or do what the author says. Write exactly what you
   found in its place.
 - `cannot_check`: an agreement between people, or something you have no way
   to read.
 
-For every `outside` decision, whatever its state, also write in `found` what
-the outside thing is and what state it is in. A reader of your result must
-be able to tell a running service from a library, a document, a proposal or
-an experiment.
+## How settled is it
+
+A true reason can rest on something that may still change. So for every
+decision that went through pass 3, and for every `outside` decision whatever
+its state, write two more facts about the thing the code or the reason rests
+on.
+
+`place`: one sentence on where the thing lives and what that place is for,
+in that place's own words. Read the repository's description and its README.
+A reader must be able to tell a running service from a library, a document,
+a proposal or an experiment.
+
+`standing`: one word.
+
+- `merged`: it is on the default branch of a repository that is used in
+  production.
+- `open`: it is in an open pull request, not on a default branch.
+- `draft`: it is in a draft pull request.
+- `prototype`: it is on a default branch, in a repository or folder that
+  calls itself a prototype, an experiment, a proposal or a sandbox.
+- `missing`: you looked and it is not there.
+- `none`: the reason points at nothing that can be read, or the decision
+  never reached pass 3.
+
+When the thing is in several of these at once, write the least settled one:
+an open pull request stacked on a draft is `draft`, and an open pull request
+in a prototype repository is `prototype`. When a reason points at several
+things, write the least settled of them and name each in `place`.
+
+Every decision whose `standing` is `open`, `draft`, `prototype` or `missing`
+gets a question, also when its state is `holds`. The question says what the
+thing is and how settled it is, and asks what happens to this code if the
+thing changes or never lands.
 
 ## The worksheet
 
@@ -133,7 +175,8 @@ Fill `searched` and `found` for every decision, also when you found nothing:
 for.
 
 For every decision whose state is `not_mentioned`, `no_reason` or
-`does_not_hold`, write `question`: one question the author can answer in a
+`does_not_hold`, and for every decision whose `standing` is not `merged` or
+`none`, write `question`: one question the author can answer in a
 line, naming what you found. "The description says the invoice download
 limits size the same way, but it has no limit. Where does 50 MB come from?"
 is a question. "Please justify this" is not.
@@ -145,25 +188,28 @@ not the likeness.
 
 > A PR lets users download a monthly report as a CSV file.
 >
+> - The download route and the handler that builds the file: `purpose`.
 > - A nightly task that deletes downloads older than 90 days (`mechanism`).
 >   The description says "the finance job reads this folder every night, so
 >   old files slow it down". The finance job exists and lists the whole
->   folder on each run: `holds`.
+>   folder on each run, on its default branch: `holds`, standing `merged`.
 > - 90 days (`number`). Nobody says why 90: `not_mentioned`. "Invoices are
 >   kept for 30 days. Why are downloads kept for 90?"
 > - A size limit of 50 MB (`number`). A comment says "same limit as the
 >   invoice download". The invoice download has no limit: `does_not_hold`.
 > - The file is written with a CSV library that is new to this repository
 >   (`outside`). The description says "the library is already used by the
->   billing service". It is, in the billing service's default branch:
->   `holds`. Found: a library, used in production by one other service.
+>   billing service". It is, but only in an open pull request there, not
+>   on its default branch: `holds`, standing `open`. "The billing service
+>   does not use this library yet: the change that adds it is still open.
+>   What happens here if that change is dropped?"
 > - The route reads the database directly, where every other route goes
 >   through the reports store (`around`). The description says "direct
 >   access" and nothing more: `no_reason`.
 > - A new field `row_count` in the reply (`exposed`). The description says
 >   "the support team asked for it": `cannot_check`.
-> - The download handler itself, written like the invoice download: not a
->   decision.
+> - The error handling in the handler, written like the invoice download:
+>   not a decision.
 
 ## Output
 
@@ -171,6 +217,7 @@ Write `OUT` as JSON, exactly this shape:
 
 ```json
 {
+  "purpose": "One sentence on what the pull request is for.",
   "decisions": [
     {
       "name": "Short plain name of the decision",
@@ -182,6 +229,8 @@ Write `OUT` as JSON, exactly this shape:
       "points_at": "What the author's reason points at, or an empty string.",
       "searched": "The commands and files you used.",
       "found": "What they showed.",
+      "place": "Where the thing lives and what that place is for, or an empty string.",
+      "standing": "open",
       "question": "The question for the author, or an empty string."
     }
   ]
@@ -189,8 +238,9 @@ Write `OUT` as JSON, exactly this shape:
 ```
 
 - `kind` is `mechanism`, `store`, `outside`, `around`, `number` or `exposed`.
-- `state` is `not_mentioned`, `no_reason`, `holds`, `does_not_hold` or
-  `cannot_check`.
+- `state` is `purpose`, `not_mentioned`, `no_reason`, `holds`,
+  `does_not_hold` or `cannot_check`.
+- `standing` is `merged`, `open`, `draft`, `prototype`, `missing` or `none`.
 - `ranges` uses added lines only, as numbered in `ADDED`.
 - Write `name`, `found` and `question` in very simple English: short
   sentences, everyday words. The reader may never have seen this code. Name

@@ -29,6 +29,13 @@ def gh(method, path, data=None):
     return json.loads(r.stdout) if r.stdout.strip() else None
 
 
+def open_prs(repo):
+    """The repository's open pull requests, as the stack check needs them."""
+    return [{"number": p["number"], "title": p["title"], "base": p["base"]["ref"], "base_sha": p["base"]["sha"],
+             "head": p["head"]["ref"], "sha": p["head"]["sha"]}
+            for p in gh("GET", f"repos/{repo}/pulls?state=open&per_page=100")]
+
+
 def upload(repo, files, message):
     """Add files to the images branch in one commit, creating the branch when it is missing.
     Returns the commit sha, which the image links are pinned to."""

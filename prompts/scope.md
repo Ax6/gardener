@@ -26,6 +26,13 @@ You are given, in the task message:
 - `DIFF`: the full unified diff, removed lines included.
 - `DESC`: the PR's title and description as its author wrote them.
 - `OTHERS`: other checkouts this code talks to, each with the ref to read.
+- `STACK`: a file, or `none`. When this PR is one of several that sit on each
+  other, the file names the ones below it and the ones on top of it, and
+  lists the lines of this PR that a later one changes. `DIFF` and `ADDED`
+  then hold only what this PR adds on top of the one below. Take the work
+  below as given: it is there, and it is not yours to judge. Judge this PR's
+  lines as written here, also the ones a later PR changes. When the purpose
+  of this PR only comes out right with a PR above it, say so in `decisions`.
 - `LOOK`: a command for reading what is not on this machine: the other
   repositories of the same organisation, and open pull requests, this
   repository's own included. Or `not available`.

@@ -6,6 +6,7 @@
 """
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -13,7 +14,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from . import account, card, github, lines, reviewer, scope, weight
+from . import account, card, github, lines, reviewer, scope, stack, weight
 
 
 def limits(text):
@@ -53,6 +54,52 @@ def diff_of(repo, base, head, spacing=False):
     return sh("git", "-C", repo, "diff", *([] if spacing else ["-w"]), f"{base}...{head}")
 
 
+def stack_of(args, work):
+    """Step 0. When the pull request is part of a stack: the commit its own lines start from, a
+    line for the top of the review, questions for the owner, and a file for the reviewer.
+    None when it stands alone, or when the stack cannot be read; the review then runs as before."""
+    if not (args.pr and args.github_repo) or args.no_stack:
+        return None
+    try:
+        prs = github.open_prs(args.github_repo)
+        mine = next((p for p in prs if p["number"] == args.pr), None)
+        if mine is None:
+            return None
+        # The checkout may hold no credentials, so the token goes in for this one command.
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        auth = ["-c", "http.extraheader=AUTHORIZATION: basic "
+                + base64.b64encode(f"x-access-token:{token}".encode()).decode()] if token else []
+        sh("git", "-C", args.repo, *auth, "fetch", "--quiet", "origin",
+           *(f'+refs/pull/{p["number"]}/head:refs/gardener/pr-{p["number"]}' for p in prs))
+        memo = {}
+
+        def contains(a, b):
+            if (a, b) not in memo:
+                memo[(a, b)] = subprocess.run(["git", "-C", args.repo, "merge-base", "--is-ancestor", a, b],
+                                              capture_output=True).returncode == 0
+            return memo[(a, b)]
+
+        below, above = stack.find(args.pr, prs, contains)
+        if not (below or above):
+            return None
+        base = below[0]["sha"] if below else args.base
+        own = diff_of(args.repo, base, mine["sha"])
+        # A pull request above that was not rebased onto this head cannot be compared line by line.
+        later = [(p["number"], sh("git", "-C", args.repo, "diff", "-w", "-U0", mine["sha"], p["sha"]))
+                 for p in above if contains(mine["sha"], p["sha"])]
+        facts = stack.changed_above(own, later)
+        note, questions, text = stack.report(mine, below, above, facts, mine["base"])
+    except (RuntimeError, subprocess.CalledProcessError, OSError, KeyError, ValueError) as err:
+        print(f"stack check skipped: {str(err).strip()[:200]}")
+        return None
+    path = os.path.join(work, "stack.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    print(f'stack: {stack.names(list(reversed(below)) + [mine] + above)}; {len(facts["code"])} lines of code '
+          f'and {facts["tests"]} of tests that this pull request adds are changed above it')
+    return {"base": base, "note": note, "questions": questions, "file": path}
+
+
 def near(share, marks, margin):
     return any(abs(share - m) <= margin for m in marks)
 
@@ -83,7 +130,10 @@ def cmd_run(args):
     cfg["others"] = [(os.path.realpath(path), ref, note) for path, ref, note in cfg["others"]]
     os.makedirs(work, exist_ok=True)
     cfg["look"] = look(args, work)
-    diff = diff_of(args.repo, args.base, args.head)
+    stacked = stack_of(args, work)
+    own_base = stacked["base"] if stacked else args.base  # in a stack, only the lines this pull request adds
+    cfg["stack"] = stacked["file"] if stacked else None
+    diff = diff_of(args.repo, own_base, args.head)
     stats = lines.collect(diff, args.repo, args.head, args.only or (), args.skip or ())
     lines.write(stats, work)
     with open(os.path.join(work, "pr.diff"), "w", encoding="utf-8") as fh:
@@ -96,15 +146,26 @@ def cmd_run(args):
         print(f"skipped: {written} written lines, under the floor of {args.min_lines}")
         return 0
 
+    if args.stack_only:
+        if not stacked:
+            print("stack: this pull request stands alone")
+            return 0
+        for line in filter(None, [stacked["note"], *stacked["questions"]]):
+            print("- " + line)
+        return 0
+
     if args.account_only:
         result = reviewer.account(args.repo, args.head, work, cfg)
         if result is None:
             print("the reviewer produced no account result")
             return 0
         am = account.model(stats, result)
-        print(f'account: {am["share"]:.0f}% of {am["total"]} lines stand on decisions the author has not accounted for')
-        for state in account.STATES:
-            print(f'  {state:14} {am["count"][state]:2} decisions, {am["by"][state]:4} lines')
+        asks = [r for r in am["rows"] if r["asks"]]
+        print(f'account: {len(am["rows"])} decisions, {len(asks)} leave a question for the author')
+        print("  " + ", ".join(f'{s} {n}' for s, n in am["count"].items() if n))
+        print("  rests on: " + ", ".join(f'{s} {n}' for s, n in am["standing"].items() if n))
+        for r in asks:
+            print(f'- [{r["state"]}, {r["standing"]}] {r["name"]}\n    {r["question"] or "(the reviewer wrote no question)"}')
         return 0
 
     alone = ThreadPoolExecutor(max_workers=1).submit(reviewer.fit, args.repo, args.head, work, cfg) if args.fit == "alone" else None
@@ -114,6 +175,9 @@ def cmd_run(args):
     if sm is None:
         print("the reviewer produced no scope result; nothing posted")
         return 0 if args.mode == "report" else 2
+    if stacked:
+        sm["decisions"] = stacked["questions"] + sm["decisions"]
+        args.note = " ".join(x for x in (args.note, stacked["note"]) if x)
     s_state = card.outcome(sm["share"], cfg["scope_limits"])
     wm = None
     if s_state != "fail" and not args.scope_only:
@@ -194,6 +258,9 @@ def main(argv=None):
     r.add_argument("--fit", choices=("off", "with-scope", "alone"), default="off",
                    help="experimental: also ask whether the PR builds on what is already there. with-scope: the scope "
                         "reviewer answers it too (fit.json). alone: a second reviewer does only that (fit-alone.json). Not posted.")
+    r.add_argument("--stack-only", action="store_true", help="stop after the stack check and print what it found")
+    r.add_argument("--no-stack", action="store_true",
+                   help="do not look for a stack: review everything between --base and --head, as GitHub shows it")
     r.add_argument("--org", help="organisation whose other repositories and open pull requests the reviewer may read, "
                    "with the read-only token in GARDENER_READ_TOKEN (default: the owner of the repository under review)")
     r.add_argument("--work", default=".gardener", help="directory for inputs, reviewer output and charts")

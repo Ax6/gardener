@@ -88,7 +88,6 @@ permissions:
 
 jobs:
   review:
-    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
