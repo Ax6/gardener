@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 import xml.dom.minidom
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -100,15 +101,63 @@ class Post(unittest.TestCase):
         self.stats = lines.collect(DIFF)
         self.wm = weight.model(self.stats, [{"category": "code_needless_check", "file": "shop/cart.py", "start": 3, "end": 45, "reason": "r"}])
 
-    def test_a_finding_across_two_hunks_becomes_two_comments(self):
-        comments = github.weight_comments(self.wm, self.stats, DIFF)
-        self.assertEqual([(c.get("start_line"), c["line"]) for c in comments], [(3, 4), (None, 45)])
+    def test_a_finding_across_two_hunks_gets_one_comment_with_a_full_range_link(self):
+        comments = github.weight_comments(self.wm, DIFF, "o/r", "abc")
+        self.assertEqual([(c.get("start_line"), c["line"]) for c in comments], [(3, 4)])
+        self.assertIn("https://github.com/o/r/blob/abc/shop/cart.py#L3-L45", comments[0]["body"])
 
-    def test_a_finding_with_a_live_thread_is_not_posted_again(self):
-        comments = github.weight_comments(self.wm, self.stats, DIFF)
-        live = [dict(comments[0])]
-        outdated = [{**comments[1], "line": None}]
-        self.assertEqual(github.new_only(comments, live + outdated), [comments[1]])
+    def test_small_reviews_go_inline_and_larger_reviews_fold_every_finding(self):
+        diff = "diff --git a/shop/cart.py b/shop/cart.py\n+++ b/shop/cart.py\n@@ -0,0 +1,6 @@\n" + "+check()\n" * 6
+        stats = lines.collect(diff)
+        findings = [
+            {"category": "code_needless_check", "file": "shop/cart.py", "start": line, "end": line,
+             "reason": f"Check at {line}", "see": "shop/cart.py:1"}
+            for line in range(1, 7)
+        ]
+        sm = scope.model(stats, {"purpose": "p", "pieces": []})
+        cfg = {"scope_limits": (20, 30), "weight_limits": (10, 15)}
+
+        for count, inline_count in ((0, 0), (5, 5), (6, 0)):
+            with self.subTest(count=count), mock.patch.object(github, "upload", return_value="assets"), mock.patch.object(github, "gh") as gh:
+                gh.side_effect = [[], {"html_url": "https://github.com/o/r/pull/1"}]
+                wm = weight.model(stats, findings[:count])
+                github.publish("o/r", 1, "abc", sm, wm, stats, diff, cfg)
+                post = gh.call_args.args[2]
+                self.assertEqual(len(post["comments"]), inline_count)
+                if count == 6:
+                    self.assertIn("<summary>6 weight findings</summary>", post["body"])
+                    for line in range(1, 7):
+                        self.assertIn(f"https://github.com/o/r/blob/abc/shop/cart.py#L{line}", post["body"])
+                else:
+                    self.assertNotIn("<summary>", post["body"])
+
+    def test_a_later_push_posts_only_findings_without_live_threads(self):
+        sm = scope.model(self.stats, {"purpose": "p", "pieces": []})
+        cfg = {"scope_limits": (20, 30), "weight_limits": (10, 15)}
+        prior = {"id": 7, "body": "<!-- gardener scope=40.00 weight=10.00 -->"}
+        old_thread = github.weight_comments(self.wm, DIFF, "o/r", "old")[0]
+        wm = weight.model(self.stats, self.wm["kept"] + [
+            {"category": "test_unneeded", "file": "shop/cart.test.ts", "start": 2, "end": 2, "reason": "Repeated test"},
+        ])
+        with mock.patch.object(github, "upload", return_value="assets"), mock.patch.object(github, "gh") as gh:
+            gh.side_effect = [[prior], [old_thread], None, None]
+            github.publish("o/r", 1, "abc", sm, wm, self.stats, DIFF, cfg)
+        _, _, post, update = gh.call_args_list
+        self.assertEqual(post.args[0], "POST")
+        self.assertEqual([comment["path"] for comment in post.args[2]["comments"]], ["shop/cart.test.ts"])
+        self.assertNotIn("<summary>", update.args[2]["body"])
+
+    def test_a_rejected_inline_review_still_leaves_the_findings_in_the_main_review(self):
+        sm = scope.model(self.stats, {"purpose": "p", "pieces": []})
+        cfg = {"scope_limits": (20, 30), "weight_limits": (10, 15)}
+        prior = {"id": 7, "body": "<!-- gardener scope=40.00 weight= -->"}
+        with mock.patch.object(github, "upload", return_value="assets"), mock.patch.object(github, "gh") as gh:
+            gh.side_effect = [[prior], [], RuntimeError("could not validate comment position"), None]
+            result = github.publish("o/r", 1, "abc", sm, self.wm, self.stats, DIFF, cfg)
+        self.assertIn("could not validate comment position", result)
+        update = gh.call_args_list[-1]
+        self.assertEqual(update.args[:2], ("PUT", "repos/o/r/pulls/1/reviews/7"))
+        self.assertIn("https://github.com/o/r/blob/abc/shop/cart.py#L3-L45", update.args[2]["body"])
 
     def test_the_card_is_valid_svg_with_and_without_weight(self):
         sm = scope.model(self.stats, {"purpose": "Add up a cart & more <fast>", "pieces": []})

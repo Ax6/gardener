@@ -57,7 +57,7 @@ One review, written for someone who has never seen the code. Under the chart you
 | **Download a monthly report as CSV** | Oversized<br>126 → 112 | About a quarter of its code is its own CSV writer. The repo already has one, and the invoice download uses it. |
 | **Limit the size of the file** | Unsure<br>14 → ? | No limit is written down anywhere. The size of the largest real report would settle it. |
 
-Under the table there's a short list of questions for whoever owns the code ("is a second export format actually planned?"), because some of these calls aren't Gardener's to make. The Level 2 findings go as comments directly on the lines they're about.
+Under the table there's a short list of questions for whoever owns the code ("is a second export format actually planned?"), because some of these calls aren't Gardener's to make. When Weight finds five things or fewer, Gardener posts them inline and reuses existing threads. When there are six or more, expand **Weight findings** in the main review to see the full list with links to the lines.
 
 ## Ok I want it
 
