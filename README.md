@@ -19,7 +19,7 @@
 
 ## Wait, what is this
 
-You know the PR. Somebody had to add one endpoint and one column, and somehow it came out at a thousand lines. Bro. A thousand lines to save one thing in the database??
+You know the PR. Had to add one endpoint and one column, and somehow it came out at a thousand lines. Bro. A thousand lines to save one thing in the database??
 
 The annoying part is that you can't even complain properly, because every line is fine! It has tests! It "handles failures"! So you approve it, and now your repo owns a retry system for something that costs the user one extra click, plus a history table that nobody is ever going to read.
 
